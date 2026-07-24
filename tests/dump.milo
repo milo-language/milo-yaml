@@ -1,0 +1,32 @@
+// Print a YAML file as compact JSON. Drives scripts/oracle.py, which diffs the
+// output against a reference parser.
+//
+//   milo run tests/dump.milo tests/conformance/01-scalars.yaml
+
+from "../lib" import { yamlParse, yamlToJson }
+from "std/io" import { readFile }
+from "std/args" import { args }
+
+fn main(): i32 {
+    let argv = args()
+    if argv.len < 2 {
+        print("usage: dump <file.yaml>")
+        return 2
+    }
+    let source = match readFile(argv[1]) {
+        Result.Ok(text) => { text }
+        Result.Err(e) => {
+            print($"cannot read: {e}")
+            return 1
+        }
+    }
+    let doc = match yamlParse(source) {
+        Result.Ok(d) => { d }
+        Result.Err(msg) => {
+            print($"parse error: {msg}")
+            return 1
+        }
+    }
+    print(yamlToJson(doc))
+    return 0
+}

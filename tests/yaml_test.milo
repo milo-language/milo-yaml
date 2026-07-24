@@ -1,0 +1,172 @@
+from "../lib" import { yamlParse, yamlParseAll, yamlToJson, Yaml, YamlKind }
+from "std/testing" import { assertStrEqual, assertMsg, assertEqual64 }
+
+// Every structural test goes through JSON: it pins the whole shape in one
+// comparison instead of a dozen handle lookups.
+fn roundTrip(src: string): string {
+    let doc = yamlParse(src)!
+    return yamlToJson(doc)
+}
+
+fn testScalars() {
+    assertStrEqual(roundTrip("hello"), "\"hello\"")
+    assertStrEqual(roundTrip("42"), "42")
+    assertStrEqual(roundTrip("-7"), "-7")
+    assertStrEqual(roundTrip("3.5"), "3.5")
+    assertStrEqual(roundTrip("true"), "true")
+    assertStrEqual(roundTrip("False"), "false")
+    assertStrEqual(roundTrip("null"), "null")
+    assertStrEqual(roundTrip("~"), "null")
+    assertStrEqual(roundTrip("0x1f"), "31")
+    assertStrEqual(roundTrip("0o17"), "15")
+    assertStrEqual(roundTrip("1_000"), "1000")
+    // A version-like or path-like scalar must stay a string.
+    assertStrEqual(roundTrip("1.2.3"), "\"1.2.3\"")
+    assertStrEqual(roundTrip("/usr/bin"), "\"/usr/bin\"")
+}
+
+fn testQuoting() {
+    assertStrEqual(roundTrip("'don''t'"), "\"don't\"")
+    assertStrEqual(roundTrip("\"a\\tb\""), "\"a\\tb\"")
+    assertStrEqual(roundTrip("\"\\u00e9\""), "\"é\"")
+    // Quoted digits are a string, not a number.
+    assertStrEqual(roundTrip("\"42\""), "\"42\"")
+    // '#' only starts a comment when a space precedes it.
+    assertStrEqual(roundTrip("a#b"), "\"a#b\"")
+    assertStrEqual(roundTrip("a # b"), "\"a\"")
+}
+
+fn testMapping() {
+    assertStrEqual(roundTrip("name: milo\nport: 8080\n"), "{\"name\":\"milo\",\"port\":8080}")
+    assertStrEqual(roundTrip("a:\n  b:\n    c: 1\n"), "{\"a\":{\"b\":{\"c\":1}}}")
+    // A key with no value is null.
+    assertStrEqual(roundTrip("a:\nb: 1\n"), "{\"a\":null,\"b\":1}")
+    // A URL value must not be mistaken for a nested key.
+    assertStrEqual(roundTrip("url: http://x/y\n"), "{\"url\":\"http://x/y\"}")
+}
+
+fn testSequences() {
+    assertStrEqual(roundTrip("- 1\n- 2\n- 3\n"), "[1,2,3]")
+    // A block sequence may sit at its key's own indentation.
+    assertStrEqual(roundTrip("items:\n- a\n- b\n"), "{\"items\":[\"a\",\"b\"]}")
+    assertStrEqual(roundTrip("items:\n  - a\n  - b\n"), "{\"items\":[\"a\",\"b\"]}")
+    // Compact entries: a mapping, and a nested sequence, starting on the dash line.
+    assertStrEqual(roundTrip("- name: a\n  id: 1\n- name: b\n  id: 2\n"),
+        "[{\"name\":\"a\",\"id\":1},{\"name\":\"b\",\"id\":2}]")
+    assertStrEqual(roundTrip("- - 1\n  - 2\n- 3\n"), "[[1,2],3]")
+    assertStrEqual(roundTrip("a:\n  - x: 1\n    y: 2\n"), "{\"a\":[{\"x\":1,\"y\":2}]}")
+}
+
+fn testFlow() {
+    assertStrEqual(roundTrip("[1, 2, 3]"), "[1,2,3]")
+    assertStrEqual(roundTrip("{a: 1, b: two}"), "{\"a\":1,\"b\":\"two\"}")
+    assertStrEqual(roundTrip("k: [a, {b: 2}, []]"), "{\"k\":[\"a\",{\"b\":2},[]]}")
+    assertStrEqual(roundTrip("k: {}"), "{\"k\":{}}")
+    assertStrEqual(roundTrip("k: [\"x, y\", 'z']"), "{\"k\":[\"x, y\",\"z\"]}")
+}
+
+fn testBlockScalars() {
+    assertStrEqual(roundTrip("s: |\n  one\n  two\n"), "{\"s\":\"one\\ntwo\\n\"}")
+    assertStrEqual(roundTrip("s: |-\n  one\n  two\n"), "{\"s\":\"one\\ntwo\"}")
+    assertStrEqual(roundTrip("s: >\n  one\n  two\n"), "{\"s\":\"one two\\n\"}")
+    assertStrEqual(roundTrip("s: >-\n  one\n\n  two\n"), "{\"s\":\"one\\ntwo\"}")
+    // Indentation deeper than the block's own is preserved verbatim.
+    assertStrEqual(roundTrip("s: |\n  a\n    b\n"), "{\"s\":\"a\\n  b\\n\"}")
+    assertStrEqual(roundTrip("s: |\n  a\nnext: 1\n"), "{\"s\":\"a\\n\",\"next\":1}")
+}
+
+fn testAnchors() {
+    let src = "base: &b\n  a: 1\n  b: 2\nuse: *b\n"
+    assertStrEqual(roundTrip(src), "{\"base\":{\"a\":1,\"b\":2},\"use\":{\"a\":1,\"b\":2}}")
+    // Merge keys splice the anchored map in; an explicit key still wins.
+    let merged = "base: &b\n  a: 1\n  b: 2\nchild:\n  <<: *b\n  b: 9\n"
+    let doc = yamlParse(merged)!
+    let child = doc.get(doc.root(), "child")
+    assertEqual64(doc.getInt(child, "b") ?? 0, 9)
+    assertEqual64(doc.getInt(child, "a") ?? 0, 1)
+}
+
+fn testComments() {
+    let src = "# leading\n\nname: milo   # trailing\n\n# between\nport: 1\n"
+    assertStrEqual(roundTrip(src), "{\"name\":\"milo\",\"port\":1}")
+}
+
+fn testAccessors() {
+    let src = "server:\n  host: localhost\n  port: 8080\n  tls: true\n  ratio: 0.25\nhosts:\n  - name: a\n  - name: b\n"
+    let doc = yamlParse(src)!
+    assertStrEqual(doc.asStr(doc.path("server.host")) ?? "", "localhost")
+    assertEqual64(doc.asInt(doc.path("server.port")) ?? 0, 8080)
+    assertMsg(doc.asBool(doc.path("server.tls")) ?? false, "tls should be true")
+    assertMsg((doc.asFloat(doc.path("server.ratio")) ?? 0.0) == 0.25, "ratio should be 0.25")
+    assertStrEqual(doc.asStr(doc.path("hosts.1.name")) ?? "", "b")
+    assertEqual64(doc.len(doc.path("hosts")), 2)
+    assertEqual64(doc.path("nope.deeper"), -1)
+    // A missing handle reads as absent rather than trapping.
+    assertEqual64(doc.asInt(doc.path("nope")) ?? -5, -5)
+    assertMsg(doc.isMap(doc.root()), "root is a map")
+    assertMsg(doc.isSeq(doc.path("hosts")), "hosts is a seq")
+    assertStrEqual(doc.keyAt(doc.root(), 0), "server")
+    // An int reads as a float; a float does not read as an int.
+    assertMsg((doc.asFloat(doc.path("server.port")) ?? 0.0) == 8080.0, "int as float")
+    assertEqual64(doc.asInt(doc.path("server.ratio")) ?? -1, -1)
+}
+
+fn testKindTags() {
+    let doc = yamlParse("a: 1\nb: x\nc: [1]\n")!
+    var seen = 0
+    match doc.kind(doc.path("a")) {
+        YamlKind.Int => { seen = seen + 1 }
+        _ => { }
+    }
+    match doc.kind(doc.path("b")) {
+        YamlKind.Str => { seen = seen + 1 }
+        _ => { }
+    }
+    match doc.kind(doc.path("zz")) {
+        YamlKind.Missing => { seen = seen + 1 }
+        _ => { }
+    }
+    assertEqual64(seen, 3)
+}
+
+fn testMultiDoc() {
+    let docs = yamlParseAll("---\na: 1\n---\nb: 2\n...\n")!
+    assertEqual64(docs.len, 2)
+    assertStrEqual(yamlToJson(docs[0]), "{\"a\":1}")
+    assertStrEqual(yamlToJson(docs[1]), "{\"b\":2}")
+    // A stream with no separators is still one document.
+    let single = yamlParseAll("a: 1\n")!
+    assertEqual64(single.len, 1)
+}
+
+fn testErrors() {
+    let bad = yamlParse("k: *nope\n")
+    assertMsg(bad.isErr(), "unknown alias must be an error")
+    let unterminated = yamlParse("k: [1, 2\n")
+    assertMsg(unterminated.isErr(), "unterminated flow must be an error")
+}
+
+fn testRealConfig() {
+    let src = "version: '3.9'\n" +
+        "services:\n" +
+        "  web:\n" +
+        "    image: nginx:1.25\n" +
+        "    ports:\n" +
+        "      - 80:80\n" +
+        "      - 443:443\n" +
+        "    environment:\n" +
+        "      TLS: true\n" +
+        "    command: >\n" +
+        "      nginx -g\n" +
+        "      'daemon off;'\n" +
+        "  db:\n" +
+        "    image: postgres:16\n"
+    let doc = yamlParse(src)!
+    assertStrEqual(doc.asStr(doc.path("version")) ?? "", "3.9")
+    assertStrEqual(doc.asStr(doc.path("services.web.image")) ?? "", "nginx:1.25")
+    assertEqual64(doc.len(doc.path("services.web.ports")), 2)
+    assertStrEqual(doc.asStr(doc.path("services.web.ports.0")) ?? "", "80:80")
+    assertMsg(doc.getBool(doc.path("services.web.environment"), "TLS") ?? false, "TLS true")
+    assertStrEqual(doc.asStr(doc.path("services.web.command")) ?? "", "nginx -g 'daemon off;'\n")
+    assertEqual64(doc.len(doc.path("services")), 2)
+}

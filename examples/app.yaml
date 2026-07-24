@@ -1,0 +1,33 @@
+# Sample config exercising most of what the parser supports.
+version: '3.9'
+
+defaults: &defaults
+  restart: always
+  logging:
+    driver: json-file
+    max_size: 10m
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  tls: true
+  timeout: 2.5
+  banner: |
+    milo yaml
+    all rights reserved
+
+services:
+  - name: web
+    <<: *defaults
+    image: nginx:1.25
+    ports: [80, 443]
+  - name: db
+    <<: *defaults
+    image: postgres:16
+    restart: on-failure   # explicit key beats the merged one
+    ports: [5432]
+
+features:
+  metrics: true
+  tracing: false
+  sample_rate: 0.05

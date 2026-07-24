@@ -1,0 +1,17 @@
+a:
+  b:
+    c:
+      d: deep
+list_at_key_indent:
+- 1
+- 2
+list_indented:
+  - 3
+  - 4
+mixed:
+  - name: first
+    tags:
+      - x
+      - y
+  - name: second
+    tags: []

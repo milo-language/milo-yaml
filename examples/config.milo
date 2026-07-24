@@ -1,0 +1,60 @@
+// Read a YAML config and print what it says.
+//
+//   milo run examples/config.milo examples/app.yaml
+
+from "../lib" import { yamlParse, yamlToJson }
+from "std/io" import { readFile }
+from "std/args" import { args }
+
+fn main(): i32 {
+    let argv = args()
+    let path = if argv.len > 1 { argv[1].clone() } else { "examples/app.yaml" }
+
+    let source = match readFile(path) {
+        Result.Ok(text) => { text }
+        Result.Err(e) => {
+            print($"cannot read {path}: {e}")
+            return 1
+        }
+    }
+
+    let doc = match yamlParse(source) {
+        Result.Ok(d) => { d }
+        Result.Err(msg) => {
+            print($"parse error: {msg}")
+            return 1
+        }
+    }
+
+    let host = doc.asStr(doc.path("server.host")) ?? "127.0.0.1"
+    let port = doc.asInt(doc.path("server.port")) ?? 8080
+    let tls = doc.asBool(doc.path("server.tls")) ?? false
+    let timeout = doc.asFloat(doc.path("server.timeout")) ?? 1.0
+    print($"listening on {host}:{port} (tls={tls}, timeout={timeout}s)")
+
+    let services = doc.path("services")
+    print($"{doc.len(services)} service(s):")
+    for i in 0..doc.len(services) {
+        let svc = doc.at(services, i)
+        let name = doc.getStr(svc, "name") ?? "?"
+        let image = doc.getStr(svc, "image") ?? "?"
+        // `restart` comes from the `<<: *defaults` merge unless the service
+        // overrode it.
+        let restart = doc.getStr(svc, "restart") ?? "no"
+        let ports = doc.get(svc, "ports")
+        var portList = ""
+        for p in 0..doc.len(ports) {
+            if p > 0 {
+                portList.pushStr(", ")
+            }
+            portList.pushStr(doc.text(doc.at(ports, p)))
+        }
+        print($"  {name}: {image} [{portList}] restart={restart}")
+    }
+
+    let banner = doc.asStr(doc.path("server.banner")) ?? ""
+    print($"banner: {banner}")
+
+    print($"as json: {yamlToJson(doc)}")
+    return 0
+}

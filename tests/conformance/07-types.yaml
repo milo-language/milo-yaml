@@ -1,0 +1,8 @@
+hex: 0x1F
+octal: 0o17
+underscored: 1_000_000
+exp: 1.5e3
+neg_exp: 2.0e-3
+zero: 0
+big: 9007199254740993
+str_like_bool: "true"

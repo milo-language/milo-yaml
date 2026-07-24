@@ -1,0 +1,16 @@
+str: hello
+num: 42
+neg: -17
+float: 2.5
+bool_true: true
+bool_false: false
+nil: null
+tilde: ~
+empty:
+quoted_num: "42"
+version: 1.2.3
+path: /usr/local/bin
+colon_in_url: http://example.com:8080/x
+hash_in_word: red#5
+apostrophe: 'it''s'
+escaped: "tab\there"

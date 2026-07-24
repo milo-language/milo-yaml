@@ -1,0 +1,9 @@
+# top comment
+
+key: value    # trailing comment
+# standalone
+other: 1
+list:
+  # comment inside a list
+  - a    # after item
+  - b

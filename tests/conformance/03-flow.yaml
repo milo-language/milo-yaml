@@ -1,0 +1,6 @@
+seq: [1, 2, 3]
+map: {a: 1, b: two}
+nested: [{k: [1, {z: 0}]}, []]
+empty_seq: []
+empty_map: {}
+quoted: ["a, b", 'c']

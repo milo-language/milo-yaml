@@ -1,0 +1,10 @@
+{
+  "name": "yaml",
+  "version": "0.1.0",
+  "description": "YAML 1.2 subset parser",
+  "license": "MIT",
+  "repository": "github.com/milo-language/yaml",
+  "lib": "lib.milo",
+  "targets": ["darwin", "linux", "windows"],
+  "exclude": ["tests/**", "examples/**"]
+}

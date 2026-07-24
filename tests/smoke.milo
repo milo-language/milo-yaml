@@ -1,0 +1,7 @@
+from "../lib" import { yamlParse, yamlToJson }
+
+fn main(): i32 {
+    let doc = yamlParse("name: milo\nport: 8080\n")!
+    print(yamlToJson(doc))
+    return 0
+}

@@ -1,0 +1,11 @@
+defaults: &d
+  retries: 3
+  timeout: 30
+job_a:
+  <<: *d
+  name: a
+job_b:
+  <<: *d
+  name: b
+  timeout: 60
+alias_whole: *d
