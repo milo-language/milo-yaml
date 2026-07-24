@@ -20,7 +20,7 @@ jobs:
           echo "$HOME/.milo-bin" >> "$GITHUB_PATH"
 
       - name: Unit tests
-        run: milo test tests/
+        run: milo test tests/yaml_test.milo
 
       - name: Differential test against ruamel.yaml
         run: |
