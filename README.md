@@ -4,12 +4,12 @@ A YAML 1.2 subset parser for [Milo](https://github.com/milo-language/milo). No
 dependencies beyond the standard library.
 
 ```bash
-milo add github.com/milo-language/yaml            # latest on main
-milo add github.com/milo-language/yaml@v0.1.1     # or pin a release tag
+milo add github.com/milo-language/yaml            # latest release
+milo add github.com/milo-language/yaml@v0.1.1     # or pin a specific tag
 ```
 
-Either way `milo.lock` records the exact commit and tree hash, so the build is
-reproducible whether or not the manifest names a tag.
+The ref-less form resolves to the highest tag and writes it into `milo.json`;
+`milo.lock` then records the exact commit and tree hash either way.
 
 ```milo
 from "yaml" import { yamlParse, yamlToJson }
