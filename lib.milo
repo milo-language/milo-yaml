@@ -9,7 +9,6 @@
 // anyway — and indices make the whole document one contiguous, cheaply-cloned
 // value.
 
-from "std/string" import { strRepeat }
 from "std/strconv" import { parseInt, parseIntRadix, parseFloat }
 
 // Node kinds. The integer repr is the pool's storage; the variant names are the public
@@ -544,7 +543,7 @@ impl YamlParser {
             // column over: blank out the dash and re-parse the line at that column.
             let lead = rest.len - rest.trimStart().len
             let restCol = indent + 1 + lead
-            var rewritten = strRepeat(" ", restCol)
+            var rewritten = " ".repeat(restCol)
             rewritten.pushStr(rest.trimStart())
             self.lines[self.pos] = rewritten
             let child = self.parseBlock(restCol)?
@@ -608,7 +607,7 @@ impl YamlParser {
             } else {
                 // Replace the line with just the value so the line-level parser
                 // (block scalars, flow, aliases) sees it in isolation.
-                var rewritten = strRepeat(" ", indent)
+                var rewritten = " ".repeat(indent)
                 rewritten.pushStr(rest)
                 self.lines[self.pos] = rewritten
                 value = self.parseLineValue(indent)?

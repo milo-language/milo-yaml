@@ -110,7 +110,7 @@ Errors carry the line number: `line 4: unknown alias '*base'`.
 ## Tests
 
 ```bash
-milo test tests/yaml_test.milo                   # unit tests
+milo test tests                                 # unit tests
 python3 scripts/oracle.py --milo ./milo           # differential test (needs ruamel.yaml)
 milo run examples/config.milo examples/app.yaml   # worked example
 ```
