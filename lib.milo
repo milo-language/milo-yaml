@@ -322,8 +322,9 @@ struct YamlParser {
     nodes: Vec<YamlNode>,
     childIdx: Vec<NodeId>,
     strs: Vec<string>,
-    anchorNames: Vec<string>,
-    anchorNodes: Vec<NodeId>,
+    // Anchor name → node. insert overwrites, so a redefined anchor resolves to the most
+    // recent binding (same as the old last-wins reverse scan), now O(1).
+    anchors: HashMap<string, NodeId>,
     // Set by the line-level parser when a `&name` marker precedes a value whose
     // node is only built later (a nested block). Consumed by whoever finishes it.
     pendingAnchor: string,
@@ -351,8 +352,7 @@ fn newParser(src: &string): YamlParser {
         nodes: Vec.new(),
         childIdx: Vec.new(),
         strs: Vec.new(),
-        anchorNames: Vec.new(),
-        anchorNodes: Vec.new(),
+        anchors: HashMap.new(),
         pendingAnchor: "",
     }
 }
@@ -419,17 +419,12 @@ impl YamlParser {
         if name.len == 0 {
             return
         }
-        self.anchorNames.push(name)
-        self.anchorNodes.push(node)
+        self.anchors.insert(name, node)
     }
 
     fn lookupAnchor(self: &Self, name: &string): NodeId {
-        var i = self.anchorNames.len - 1
-        while i >= 0 {
-            if self.anchorNames[i] == name {
-                return self.anchorNodes[i]
-            }
-            i = i - 1
+        if let Option.Some(id) = self.anchors.get(name.clone()) {
+            return id
         }
         return nilNode()
     }
