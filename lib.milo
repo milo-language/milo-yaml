@@ -12,28 +12,22 @@
 from "std/string" import { strRepeat }
 from "std/strconv" import { parseInt, parseIntRadix, parseFloat }
 
-// Node kinds. Stored as i32 in the pool; `YamlKind` is the public spelling.
-let K_NULL: i32 = 0
-let K_BOOL: i32 = 1
-let K_INT: i32 = 2
-let K_FLOAT: i32 = 3
-let K_STR: i32 = 4
-let K_SEQ: i32 = 5
-let K_MAP: i32 = 6
-
-pub enum YamlKind {
-    Null,
-    Bool,
-    Int,
-    Float,
-    Str,
-    Seq,
-    Map,
-    Missing,
+// Node kinds. The integer repr is the pool's storage; the variant names are the public
+// spelling — one type instead of a parallel `K_*` i32 table. Scalar kinds sort below Str,
+// which `isScalar` relies on via `kind as i32`.
+pub enum YamlKind: i32 {
+    Null,       // 0
+    Bool,       // 1
+    Int,        // 2
+    Float,      // 3
+    Str,        // 4
+    Seq,        // 5
+    Map,        // 6
+    Missing,    // 7 — only the accessor returns it, for an invalid node
 }
 
 pub struct YamlNode {
-    kind: i32,
+    kind: YamlKind,
     boolVal: bool,
     intVal: i64,
     floatVal: f64,
@@ -230,7 +224,7 @@ fn parseYamlInt(s: &string): Option<i64> {
         }
         let digits = stripUnderscores(body.substr(2, body.len))
         let v = parseIntRadix(digits, 16)?
-        return Option.Some(if neg { 0 - v } else { v })
+        return Option.Some(if neg { -v } else { v })
     }
     if body.len > 2 && body[0] == '0' && (body[1] == 'o' || body[1] == 'O') {
         if !digitsOnly(body, 2, 8) {
@@ -238,7 +232,7 @@ fn parseYamlInt(s: &string): Option<i64> {
         }
         let digits = stripUnderscores(body.substr(2, body.len))
         let v = parseIntRadix(digits, 8)?
-        return Option.Some(if neg { 0 - v } else { v })
+        return Option.Some(if neg { -v } else { v })
     }
     if body.len > 2 && body[0] == '0' && (body[1] == 'b' || body[1] == 'B') {
         if !digitsOnly(body, 2, 2) {
@@ -246,24 +240,24 @@ fn parseYamlInt(s: &string): Option<i64> {
         }
         let digits = stripUnderscores(body.substr(2, body.len))
         let v = parseIntRadix(digits, 2)?
-        return Option.Some(if neg { 0 - v } else { v })
+        return Option.Some(if neg { -v } else { v })
     }
     if !digitsOnly(body, 0, 10) {
         return Option.None
     }
     let v = parseInt(stripUnderscores(body))?
-    return Option.Some(if neg { 0 - v } else { v })
+    return Option.Some(if neg { -v } else { v })
 }
 
 fn parseYamlFloat(s: &string): Option<f64> {
     if s == ".inf" || s == ".Inf" || s == ".INF" || s == "+.inf" {
-        return Option.Some(1.0 / 0.0)
+        return Option.Some(f64.INF)
     }
     if s == "-.inf" || s == "-.Inf" || s == "-.INF" {
-        return Option.Some(0.0 - 1.0 / 0.0)
+        return Option.Some(f64.NEG_INF)
     }
     if s == ".nan" || s == ".NaN" || s == ".NAN" {
-        return Option.Some(0.0 / 0.0)
+        return Option.Some(f64.NAN)
     }
     // Reject anything the float grammar doesn't allow before handing it to
     // parseFloat, which is lenient about trailing junk.
@@ -346,7 +340,7 @@ impl YamlParser {
         return self.strs.len - 1
     }
 
-    fn addNode(self: &mut Self, kind: i32): i64 {
+    fn addNode(self: &mut Self, kind: YamlKind): i64 {
         self.nodes.push(YamlNode {
             kind: kind, boolVal: false, intVal: 0, floatVal: 0.0,
             strIdx: -1, keyIdx: -1, childStart: 0, childCount: 0,
@@ -433,35 +427,35 @@ impl YamlParser {
 
     fn scalarNode(self: &mut Self, text: &string, quoted: bool): i64 {
         if quoted {
-            let id = self.addNode(K_STR)
+            let id = self.addNode(YamlKind.Str)
             self.nodes[id].strIdx = self.addStr(text.clone())
             return id
         }
         if looksNull(text) {
-            let id = self.addNode(K_NULL)
+            let id = self.addNode(YamlKind.Null)
             self.nodes[id].strIdx = self.addStr(text.clone())
             return id
         }
         if looksTrue(text) || looksFalse(text) {
-            let id = self.addNode(K_BOOL)
+            let id = self.addNode(YamlKind.Bool)
             self.nodes[id].boolVal = looksTrue(text)
             self.nodes[id].strIdx = self.addStr(text.clone())
             return id
         }
         if let Option.Some(n) = parseYamlInt(text) {
-            let id = self.addNode(K_INT)
+            let id = self.addNode(YamlKind.Int)
             self.nodes[id].intVal = n
             self.nodes[id].floatVal = n as f64
             self.nodes[id].strIdx = self.addStr(text.clone())
             return id
         }
         if let Option.Some(f) = parseYamlFloat(text) {
-            let id = self.addNode(K_FLOAT)
+            let id = self.addNode(YamlKind.Float)
             self.nodes[id].floatVal = f
             self.nodes[id].strIdx = self.addStr(text.clone())
             return id
         }
-        let id = self.addNode(K_STR)
+        let id = self.addNode(YamlKind.Str)
         self.nodes[id].strIdx = self.addStr(text.clone())
         return id
     }
@@ -471,7 +465,7 @@ impl YamlParser {
     fn parseBlock(self: &mut Self, indent: i64): Result<i64> {
         self.skipBlanks()
         if self.atDocBoundary() {
-            return Result.Ok(self.addNode(K_NULL))
+            return Result.Ok(self.addNode(YamlKind.Null))
         }
         let text = self.curText()
         if isSeqEntry(text) {
@@ -489,7 +483,7 @@ impl YamlParser {
     fn parseIndentedValue(self: &mut Self, indent: i64): Result<i64> {
         self.skipBlanks()
         if self.atDocBoundary() {
-            return Result.Ok(self.addNode(K_NULL))
+            return Result.Ok(self.addNode(YamlKind.Null))
         }
         let childIndent = self.curIndent()
         if childIndent > indent {
@@ -498,13 +492,12 @@ impl YamlParser {
         if childIndent == indent && isSeqEntry(self.curText()) {
             return self.parseSeq(indent)
         }
-        return Result.Ok(self.addNode(K_NULL))
+        return Result.Ok(self.addNode(YamlKind.Null))
     }
 
     fn parseSeq(self: &mut Self, indent: i64): Result<i64> {
-        let node = self.addNode(K_SEQ)
-        let anchor = self.pendingAnchor.clone()
-        self.pendingAnchor = ""
+        let node = self.addNode(YamlKind.Seq)
+        let anchor = replace(self.pendingAnchor, "")
         if anchor.len > 0 {
             self.defineAnchor(anchor, node)
         }
@@ -544,9 +537,8 @@ impl YamlParser {
     }
 
     fn parseMap(self: &mut Self, indent: i64): Result<i64> {
-        let node = self.addNode(K_MAP)
-        let anchor = self.pendingAnchor.clone()
-        self.pendingAnchor = ""
+        let node = self.addNode(YamlKind.Map)
+        let anchor = replace(self.pendingAnchor, "")
         if anchor.len > 0 {
             self.defineAnchor(anchor, node)
         }
@@ -637,13 +629,13 @@ impl YamlParser {
     // `<<: *base` (or a sequence of them) splices the referenced map's entries in.
     fn collectMerge(self: &mut Self, value: i64, out: &mut Vec<i64>) {
         let kind = self.nodes[value].kind
-        if kind == K_MAP {
+        if kind == YamlKind.Map {
             let start = self.nodes[value].childStart
             let count = self.nodes[value].childCount
             for i in 0..count {
                 out.push(self.childIdx[start + i])
             }
-        } else if kind == K_SEQ {
+        } else if kind == YamlKind.Seq {
             let start = self.nodes[value].childStart
             let count = self.nodes[value].childCount
             for i in 0..count {
@@ -671,8 +663,7 @@ impl YamlParser {
             return Result.Ok(self.cloneNode(target))
         }
         var body = text.clone()
-        var anchorName = self.pendingAnchor.clone()
-        self.pendingAnchor = ""
+        var anchorName = replace(self.pendingAnchor, "")
         if body.len > 1 && body[0] == '&' {
             let cut = tokenEnd(body, 1)
             anchorName = body.substr(1, cut)
@@ -806,8 +797,7 @@ impl YamlParser {
                 body.push('\n')
             }
         }
-        let anchor = self.pendingAnchor.clone()
-        self.pendingAnchor = ""
+        let anchor = replace(self.pendingAnchor, "")
         let id = self.scalarNode(body, true)
         if anchor.len > 0 {
             self.defineAnchor(anchor, id)
@@ -824,7 +814,7 @@ impl YamlParser {
         }
         let c = text[i]
         if c == '[' {
-            let node = self.addNode(K_SEQ)
+            let node = self.addNode(YamlKind.Seq)
             var kids: Vec<i64> = Vec.new()
             i = skipSpaces(text, i + 1)
             while i < text.len && text[i] != ']' {
@@ -842,7 +832,7 @@ impl YamlParser {
             return Result.Ok(FlowRes { node: node, next: i + 1 })
         }
         if c == '{' {
-            let node = self.addNode(K_MAP)
+            let node = self.addNode(YamlKind.Map)
             var kids: Vec<i64> = Vec.new()
             i = skipSpaces(text, i + 1)
             while i < text.len && text[i] != '}' {
@@ -859,7 +849,7 @@ impl YamlParser {
                     value = res.node
                     i = skipSpaces(text, res.next)
                 } else {
-                    value = self.addNode(K_NULL)
+                    value = self.addNode(YamlKind.Null)
                 }
                 self.nodes[value].keyIdx = self.addStr(key)
                 kids.push(value)
@@ -1121,7 +1111,7 @@ pub fn yamlParseAll(src: string): Result<Vec<Yaml>> {
     }
     if out.len == 0 {
         var empty = newParser("")
-        let n = empty.addNode(K_NULL)
+        let n = empty.addNode(YamlKind.Null)
         out.push(finish(empty, n))
     }
     return Result.Ok(out)
@@ -1167,29 +1157,13 @@ impl Yaml {
     }
 
     fn kind(self: &Yaml, node: i64): YamlKind {
+        // The field already IS a YamlKind now — the pool stores the type directly, so the
+        // old i32 → variant translation table is gone. Missing is the only value the field
+        // never holds; it stands for an out-of-range handle.
         if !self.valid(node) {
             return YamlKind.Missing
         }
-        let k = self.nodes[node].kind
-        if k == K_NULL {
-            return YamlKind.Null
-        }
-        if k == K_BOOL {
-            return YamlKind.Bool
-        }
-        if k == K_INT {
-            return YamlKind.Int
-        }
-        if k == K_FLOAT {
-            return YamlKind.Float
-        }
-        if k == K_STR {
-            return YamlKind.Str
-        }
-        if k == K_SEQ {
-            return YamlKind.Seq
-        }
-        return YamlKind.Map
+        return self.nodes[node].kind
     }
 
     fn exists(self: &Yaml, node: i64): bool {
@@ -1197,19 +1171,19 @@ impl Yaml {
     }
 
     fn isNull(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == K_NULL
+        return self.valid(node) && self.nodes[node].kind == YamlKind.Null
     }
 
     fn isMap(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == K_MAP
+        return self.valid(node) && self.nodes[node].kind == YamlKind.Map
     }
 
     fn isSeq(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == K_SEQ
+        return self.valid(node) && self.nodes[node].kind == YamlKind.Seq
     }
 
     fn isScalar(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind <= K_STR
+        return self.valid(node) && (self.nodes[node].kind as i32) <= (YamlKind.Str as i32)
     }
 
     // Number of children: sequence entries, or map entries. 0 for scalars.
@@ -1307,14 +1281,14 @@ impl Yaml {
     }
 
     fn asStr(self: &Yaml, node: i64): Option<string> {
-        if !self.valid(node) || self.nodes[node].kind != K_STR {
+        if !self.valid(node) || self.nodes[node].kind != YamlKind.Str {
             return Option.None
         }
         return Option.Some(self.text(node))
     }
 
     fn asInt(self: &Yaml, node: i64): Option<i64> {
-        if !self.valid(node) || self.nodes[node].kind != K_INT {
+        if !self.valid(node) || self.nodes[node].kind != YamlKind.Int {
             return Option.None
         }
         return Option.Some(self.nodes[node].intVal)
@@ -1326,14 +1300,14 @@ impl Yaml {
             return Option.None
         }
         let k = self.nodes[node].kind
-        if k != K_FLOAT && k != K_INT {
+        if k != YamlKind.Float && k != YamlKind.Int {
             return Option.None
         }
         return Option.Some(self.nodes[node].floatVal)
     }
 
     fn asBool(self: &Yaml, node: i64): Option<bool> {
-        if !self.valid(node) || self.nodes[node].kind != K_BOOL {
+        if !self.valid(node) || self.nodes[node].kind != YamlKind.Bool {
             return Option.None
         }
         return Option.Some(self.nodes[node].boolVal)
