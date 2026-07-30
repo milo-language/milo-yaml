@@ -1,8 +1,8 @@
 // yaml — a YAML 1.2 subset parser for Milo.
 //
-// A document parses into a flat node pool. Every handle is an `i64` index into
-// that pool and -1 means "missing", so lookups chain without an Option at each
-// step: `doc.getInt(doc.path("server.port")) ?? 8080`.
+// A document parses into a flat node pool. Every handle is a `NodeId` (a newtype
+// over the pool index) and a nil handle means "missing", so lookups chain without
+// an Option at each step: `doc.getInt(doc.path("server.port")) ?? 8080`.
 //
 // The pool shape (rather than a recursive enum) is deliberate: Milo has no
 // pointers in safe code, so a self-referential value type would need an arena
@@ -26,25 +26,48 @@ pub enum YamlKind: i32 {
     Missing,    // 7 — only the accessor returns it, for an invalid node
 }
 
+// Two distinct pool-index spaces run through this file, both formerly bare `i64`.
+// Making each a single-field struct gives a zero-cost, *distinct* Copy type: the
+// checker now rejects indexing the string pool with a node handle (or vice
+// versa), the one class of mix-up bare indices could never catch.
+//   NodeId — index into the node pool (`Yaml.nodes` / `YamlParser.nodes`)
+//   StrId  — index into the string pool (`Yaml.strs` / `YamlParser.strs`)
+pub struct NodeId {
+    idx: i64,
+}
+
+pub struct StrId {
+    idx: i64,
+}
+
+// `-1` stays the "missing" sentinel it was as an i64, so chained lookups still
+// bottom out without an Option at each hop.
+fn nilNode(): NodeId { return NodeId { idx: -1 } }
+fn isNilNode(h: NodeId): bool { return h.idx < 0 }
+fn nilStr(): StrId { return StrId { idx: -1 } }
+fn isNilStr(h: StrId): bool { return h.idx < 0 }
+
 pub struct YamlNode {
     kind: YamlKind,
     boolVal: bool,
     intVal: i64,
     floatVal: f64,
-    // Index into `Yaml.strs`, or -1. Set for string scalars and for the raw text
+    // String-pool handle, or nil. Set for string scalars and for the raw text
     // of every scalar, so `scalarText` works on a number without reformatting it.
-    strIdx: i64,
-    // Index into `Yaml.strs` for this node's key, when it is a map entry's value.
-    keyIdx: i64,
+    strIdx: StrId,
+    // String-pool handle for this node's key, when it is a map entry's value.
+    keyIdx: StrId,
+    // Offset + span into the owning document's `childIdx` (a child-array offset,
+    // not a node handle), so these stay plain i64.
     childStart: i64,
     childCount: i64,
 }
 
 pub struct Yaml {
     nodes: Vec<YamlNode>,
-    childIdx: Vec<i64>,
+    childIdx: Vec<NodeId>,
     strs: Vec<string>,
-    root: i64,
+    root: NodeId,
 }
 
 // ── Lexical helpers ──────────────────────────────────────────────────────────
@@ -297,10 +320,10 @@ struct YamlParser {
     lines: Vec<string>,
     pos: i64,
     nodes: Vec<YamlNode>,
-    childIdx: Vec<i64>,
+    childIdx: Vec<NodeId>,
     strs: Vec<string>,
     anchorNames: Vec<string>,
-    anchorNodes: Vec<i64>,
+    anchorNodes: Vec<NodeId>,
     // Set by the line-level parser when a `&name` marker precedes a value whose
     // node is only built later (a nested block). Consumed by whoever finishes it.
     pendingAnchor: string,
@@ -335,28 +358,28 @@ fn newParser(src: &string): YamlParser {
 }
 
 impl YamlParser {
-    fn addStr(self: &mut Self, s: string): i64 {
+    fn addStr(self: &mut Self, s: string): StrId {
         self.strs.push(s)
-        return self.strs.len - 1
+        return StrId { idx: self.strs.len - 1 }
     }
 
-    fn addNode(self: &mut Self, kind: YamlKind): i64 {
+    fn addNode(self: &mut Self, kind: YamlKind): NodeId {
         self.nodes.push(YamlNode {
             kind: kind, boolVal: false, intVal: 0, floatVal: 0.0,
-            strIdx: -1, keyIdx: -1, childStart: 0, childCount: 0,
+            strIdx: nilStr(), keyIdx: nilStr(), childStart: 0, childCount: 0,
         })
-        return self.nodes.len - 1
+        return NodeId { idx: self.nodes.len - 1 }
     }
 
     // A container's children are flattened into `childIdx` only once its whole
     // subtree is parsed, so nested containers interleave safely.
-    fn attach(self: &mut Self, node: i64, kids: &Vec<i64>) {
+    fn attach(self: &mut Self, node: NodeId, kids: &Vec<NodeId>) {
         let start = self.childIdx.len
         for k in kids {
             self.childIdx.push(k)
         }
-        self.nodes[node].childStart = start
-        self.nodes[node].childCount = kids.len
+        self.nodes[node.idx].childStart = start
+        self.nodes[node.idx].childCount = kids.len
     }
 
     fn atEnd(self: &Self): bool {
@@ -392,7 +415,7 @@ impl YamlParser {
         return t == "---" || t == "..." || t.startsWith("--- ")
     }
 
-    fn defineAnchor(self: &mut Self, name: string, node: i64) {
+    fn defineAnchor(self: &mut Self, name: string, node: NodeId) {
         if name.len == 0 {
             return
         }
@@ -400,7 +423,7 @@ impl YamlParser {
         self.anchorNodes.push(node)
     }
 
-    fn lookupAnchor(self: &Self, name: &string): i64 {
+    fn lookupAnchor(self: &Self, name: &string): NodeId {
         var i = self.anchorNames.len - 1
         while i >= 0 {
             if self.anchorNames[i] == name {
@@ -408,61 +431,61 @@ impl YamlParser {
             }
             i = i - 1
         }
-        return -1
+        return nilNode()
     }
 
     // An alias binds a *new* handle to the same children, because the caller may
     // stamp a map key onto it and that must not touch the anchored node.
-    fn cloneNode(self: &mut Self, src: i64): i64 {
-        let kind = self.nodes[src].kind
+    fn cloneNode(self: &mut Self, src: NodeId): NodeId {
+        let kind = self.nodes[src.idx].kind
         let id = self.addNode(kind)
-        self.nodes[id].boolVal = self.nodes[src].boolVal
-        self.nodes[id].intVal = self.nodes[src].intVal
-        self.nodes[id].floatVal = self.nodes[src].floatVal
-        self.nodes[id].strIdx = self.nodes[src].strIdx
-        self.nodes[id].childStart = self.nodes[src].childStart
-        self.nodes[id].childCount = self.nodes[src].childCount
+        self.nodes[id.idx].boolVal = self.nodes[src.idx].boolVal
+        self.nodes[id.idx].intVal = self.nodes[src.idx].intVal
+        self.nodes[id.idx].floatVal = self.nodes[src.idx].floatVal
+        self.nodes[id.idx].strIdx = self.nodes[src.idx].strIdx
+        self.nodes[id.idx].childStart = self.nodes[src.idx].childStart
+        self.nodes[id.idx].childCount = self.nodes[src.idx].childCount
         return id
     }
 
-    fn scalarNode(self: &mut Self, text: &string, quoted: bool): i64 {
+    fn scalarNode(self: &mut Self, text: &string, quoted: bool): NodeId {
         if quoted {
             let id = self.addNode(YamlKind.Str)
-            self.nodes[id].strIdx = self.addStr(text.clone())
+            self.nodes[id.idx].strIdx = self.addStr(text.clone())
             return id
         }
         if looksNull(text) {
             let id = self.addNode(YamlKind.Null)
-            self.nodes[id].strIdx = self.addStr(text.clone())
+            self.nodes[id.idx].strIdx = self.addStr(text.clone())
             return id
         }
         if looksTrue(text) || looksFalse(text) {
             let id = self.addNode(YamlKind.Bool)
-            self.nodes[id].boolVal = looksTrue(text)
-            self.nodes[id].strIdx = self.addStr(text.clone())
+            self.nodes[id.idx].boolVal = looksTrue(text)
+            self.nodes[id.idx].strIdx = self.addStr(text.clone())
             return id
         }
         if let Option.Some(n) = parseYamlInt(text) {
             let id = self.addNode(YamlKind.Int)
-            self.nodes[id].intVal = n
-            self.nodes[id].floatVal = n as f64
-            self.nodes[id].strIdx = self.addStr(text.clone())
+            self.nodes[id.idx].intVal = n
+            self.nodes[id.idx].floatVal = n as f64
+            self.nodes[id.idx].strIdx = self.addStr(text.clone())
             return id
         }
         if let Option.Some(f) = parseYamlFloat(text) {
             let id = self.addNode(YamlKind.Float)
-            self.nodes[id].floatVal = f
-            self.nodes[id].strIdx = self.addStr(text.clone())
+            self.nodes[id.idx].floatVal = f
+            self.nodes[id.idx].strIdx = self.addStr(text.clone())
             return id
         }
         let id = self.addNode(YamlKind.Str)
-        self.nodes[id].strIdx = self.addStr(text.clone())
+        self.nodes[id.idx].strIdx = self.addStr(text.clone())
         return id
     }
 
     // ── Block level ──────────────────────────────────────────────────────────
 
-    fn parseBlock(self: &mut Self, indent: i64): Result<i64> {
+    fn parseBlock(self: &mut Self, indent: i64): Result<NodeId> {
         self.skipBlanks()
         if self.atDocBoundary() {
             return Result.Ok(self.addNode(YamlKind.Null))
@@ -480,7 +503,7 @@ impl YamlParser {
     // The value that follows `key:` (or `-`) with nothing after it on the line.
     // A block sequence is allowed to sit at the parent's own indentation, which
     // is why this can't just recurse at `indent + 1`.
-    fn parseIndentedValue(self: &mut Self, indent: i64): Result<i64> {
+    fn parseIndentedValue(self: &mut Self, indent: i64): Result<NodeId> {
         self.skipBlanks()
         if self.atDocBoundary() {
             return Result.Ok(self.addNode(YamlKind.Null))
@@ -495,13 +518,13 @@ impl YamlParser {
         return Result.Ok(self.addNode(YamlKind.Null))
     }
 
-    fn parseSeq(self: &mut Self, indent: i64): Result<i64> {
+    fn parseSeq(self: &mut Self, indent: i64): Result<NodeId> {
         let node = self.addNode(YamlKind.Seq)
         let anchor = replace(self.pendingAnchor, "")
         if anchor.len > 0 {
             self.defineAnchor(anchor, node)
         }
-        var kids: Vec<i64> = Vec.new()
+        var kids: Vec<NodeId> = Vec.new()
         while true {
             self.skipBlanks()
             if self.atDocBoundary() {
@@ -536,16 +559,16 @@ impl YamlParser {
         return Result.Ok(node)
     }
 
-    fn parseMap(self: &mut Self, indent: i64): Result<i64> {
+    fn parseMap(self: &mut Self, indent: i64): Result<NodeId> {
         let node = self.addNode(YamlKind.Map)
         let anchor = replace(self.pendingAnchor, "")
         if anchor.len > 0 {
             self.defineAnchor(anchor, node)
         }
-        var kids: Vec<i64> = Vec.new()
+        var kids: Vec<NodeId> = Vec.new()
         // `<<` merges are appended last so that explicitly-written keys, which
         // `get` finds first, always win over merged ones.
-        var merged: Vec<i64> = Vec.new()
+        var merged: Vec<NodeId> = Vec.new()
         while true {
             self.skipBlanks()
             if self.atDocBoundary() {
@@ -581,7 +604,7 @@ impl YamlParser {
                 rest = rest.substr(cut, rest.len).trim()
             }
 
-            var value: i64 = -1
+            var value: NodeId = nilNode()
             if rest.len == 0 || rest.startsWith("#") {
                 self.pendingAnchor = anchorName.clone()
                 self.pos = self.pos + 1
@@ -603,18 +626,18 @@ impl YamlParser {
                 self.collectMerge(value, merged)
                 continue
             }
-            self.nodes[value].keyIdx = self.addStr(key)
+            self.nodes[value.idx].keyIdx = self.addStr(key)
             kids.push(value)
         }
         // A merged entry is dropped outright when the map wrote that key itself:
         // keeping it would leave a duplicate key in the document that only the
         // first-match rule in `get` papered over.
         for m in merged {
-            let mk = self.nodes[m].keyIdx
+            let mk = self.nodes[m.idx].keyIdx
             var dup = false
             for k in kids {
-                let ek = self.nodes[k].keyIdx
-                if mk >= 0 && ek >= 0 && self.strs[mk] == self.strs[ek] {
+                let ek = self.nodes[k.idx].keyIdx
+                if !isNilStr(mk) && !isNilStr(ek) && self.strs[mk.idx] == self.strs[ek.idx] {
                     dup = true
                 }
             }
@@ -627,17 +650,17 @@ impl YamlParser {
     }
 
     // `<<: *base` (or a sequence of them) splices the referenced map's entries in.
-    fn collectMerge(self: &mut Self, value: i64, out: &mut Vec<i64>) {
-        let kind = self.nodes[value].kind
+    fn collectMerge(self: &mut Self, value: NodeId, out: &mut Vec<NodeId>) {
+        let kind = self.nodes[value.idx].kind
         if kind == YamlKind.Map {
-            let start = self.nodes[value].childStart
-            let count = self.nodes[value].childCount
+            let start = self.nodes[value.idx].childStart
+            let count = self.nodes[value.idx].childCount
             for i in 0..count {
                 out.push(self.childIdx[start + i])
             }
         } else if kind == YamlKind.Seq {
-            let start = self.nodes[value].childStart
-            let count = self.nodes[value].childCount
+            let start = self.nodes[value.idx].childStart
+            let count = self.nodes[value.idx].childCount
             for i in 0..count {
                 let child = self.childIdx[start + i]
                 self.collectMerge(child, out)
@@ -647,7 +670,7 @@ impl YamlParser {
 
     // ── Line level: block scalars, flow collections, aliases, plain scalars ──
 
-    fn parseLineValue(self: &mut Self, indent: i64): Result<i64> {
+    fn parseLineValue(self: &mut Self, indent: i64): Result<NodeId> {
         let text = self.curText()
         if text.len > 0 && (text[0] == '|' || text[0] == '>') {
             return self.parseBlockScalar(text, indent)
@@ -656,7 +679,7 @@ impl YamlParser {
             let cut = tokenEnd(text, 1)
             let name = text.substr(1, cut)
             let target = self.lookupAnchor(name)
-            if target < 0 {
+            if isNilNode(target) {
                 return Result.Err(self.errAt($"unknown alias '*{name}'"))
             }
             self.pos = self.pos + 1
@@ -682,7 +705,7 @@ impl YamlParser {
             return Result.Ok(res.node)
         }
         self.pos = self.pos + 1
-        var node: i64 = -1
+        var node: NodeId = nilNode()
         if body.len >= 2 && (body[0] == '"' || body[0] == '\'') && skipQuoted(body, 0) == body.len {
             node = self.scalarNode(unquote(body)?, true)
         } else {
@@ -695,7 +718,7 @@ impl YamlParser {
     }
 
     // `|`, `>`, with chomping (`-`/`+`) and an optional explicit indent digit.
-    fn parseBlockScalar(self: &mut Self, header: &string, parentIndent: i64): Result<i64> {
+    fn parseBlockScalar(self: &mut Self, header: &string, parentIndent: i64): Result<NodeId> {
         let folded = header[0] == '>'
         var chomp = 0     // 0 clip, 1 strip, 2 keep
         var explicitIndent: i64 = 0
@@ -808,6 +831,7 @@ impl YamlParser {
     // Flow collections are single-line in this subset; `next` is the offset just
     // past the value that was parsed.
     fn parseFlow(self: &mut Self, text: &string, from: i64): Result<FlowRes> {
+        // FlowRes.node carries a NodeId; the `next` offset stays a plain i64.
         var i = skipSpaces(text, from)
         if i >= text.len {
             return Result.Err(self.errAt("unexpected end of flow collection"))
@@ -815,7 +839,7 @@ impl YamlParser {
         let c = text[i]
         if c == '[' {
             let node = self.addNode(YamlKind.Seq)
-            var kids: Vec<i64> = Vec.new()
+            var kids: Vec<NodeId> = Vec.new()
             i = skipSpaces(text, i + 1)
             while i < text.len && text[i] != ']' {
                 let res = self.parseFlow(text, i)?
@@ -833,7 +857,7 @@ impl YamlParser {
         }
         if c == '{' {
             let node = self.addNode(YamlKind.Map)
-            var kids: Vec<i64> = Vec.new()
+            var kids: Vec<NodeId> = Vec.new()
             i = skipSpaces(text, i + 1)
             while i < text.len && text[i] != '}' {
                 let keyEnd = flowScalarEnd(text, i, ":,}")
@@ -843,7 +867,7 @@ impl YamlParser {
                     key = unquote(rawKey)?
                 }
                 i = skipSpaces(text, keyEnd)
-                var value: i64 = -1
+                var value: NodeId = nilNode()
                 if i < text.len && text[i] == ':' {
                     let res = self.parseFlow(text, i + 1)?
                     value = res.node
@@ -851,7 +875,7 @@ impl YamlParser {
                 } else {
                     value = self.addNode(YamlKind.Null)
                 }
-                self.nodes[value].keyIdx = self.addStr(key)
+                self.nodes[value.idx].keyIdx = self.addStr(key)
                 kids.push(value)
                 if i < text.len && text[i] == ',' {
                     i = skipSpaces(text, i + 1)
@@ -875,7 +899,7 @@ impl YamlParser {
             let end = flowScalarEnd(text, i, ",]}")
             let name = text.substr(i + 1, end).trim()
             let target = self.lookupAnchor(name)
-            if target < 0 {
+            if isNilNode(target) {
                 return Result.Err(self.errAt($"unknown alias '*{name}'"))
             }
             return Result.Ok(FlowRes { node: self.cloneNode(target), next: end })
@@ -887,7 +911,7 @@ impl YamlParser {
 }
 
 struct FlowRes {
-    node: i64,
+    node: NodeId,
     next: i64,
 }
 
@@ -1062,7 +1086,7 @@ pub fn unquote(text: &string): Result<string> {
 
 // ── Entry points ─────────────────────────────────────────────────────────────
 
-fn finish(p: YamlParser, root: i64): Yaml {
+fn finish(p: YamlParser, root: NodeId): Yaml {
     return Yaml { nodes: p.nodes, childIdx: p.childIdx, strs: p.strs, root: root }
 }
 
@@ -1128,8 +1152,8 @@ fn cloneNodes(src: &Vec<YamlNode>): Vec<YamlNode> {
     return out
 }
 
-fn cloneIdx(src: &Vec<i64>): Vec<i64> {
-    var out: Vec<i64> = Vec.new()
+fn cloneIdx(src: &Vec<NodeId>): Vec<NodeId> {
+    var out: Vec<NodeId> = Vec.new()
     for i in 0..src.len {
         out.push(src[i])
     }
@@ -1148,96 +1172,96 @@ fn cloneStrs(src: &Vec<string>): Vec<string> {
 
 impl Yaml {
     // Handle of the document's top-level value.
-    fn root(self: &Yaml): i64 {
+    fn root(self: &Yaml): NodeId {
         return self.root
     }
 
-    fn valid(self: &Yaml, node: i64): bool {
-        return node >= 0 && node < self.nodes.len
+    fn valid(self: &Yaml, node: NodeId): bool {
+        return node.idx >= 0 && node.idx < self.nodes.len
     }
 
-    fn kind(self: &Yaml, node: i64): YamlKind {
+    fn kind(self: &Yaml, node: NodeId): YamlKind {
         // The field already IS a YamlKind now — the pool stores the type directly, so the
         // old i32 → variant translation table is gone. Missing is the only value the field
         // never holds; it stands for an out-of-range handle.
         if !self.valid(node) {
             return YamlKind.Missing
         }
-        return self.nodes[node].kind
+        return self.nodes[node.idx].kind
     }
 
-    fn exists(self: &Yaml, node: i64): bool {
+    fn exists(self: &Yaml, node: NodeId): bool {
         return self.valid(node)
     }
 
-    fn isNull(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == YamlKind.Null
+    fn isNull(self: &Yaml, node: NodeId): bool {
+        return self.valid(node) && self.nodes[node.idx].kind == YamlKind.Null
     }
 
-    fn isMap(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == YamlKind.Map
+    fn isMap(self: &Yaml, node: NodeId): bool {
+        return self.valid(node) && self.nodes[node.idx].kind == YamlKind.Map
     }
 
-    fn isSeq(self: &Yaml, node: i64): bool {
-        return self.valid(node) && self.nodes[node].kind == YamlKind.Seq
+    fn isSeq(self: &Yaml, node: NodeId): bool {
+        return self.valid(node) && self.nodes[node.idx].kind == YamlKind.Seq
     }
 
-    fn isScalar(self: &Yaml, node: i64): bool {
-        return self.valid(node) && (self.nodes[node].kind as i32) <= (YamlKind.Str as i32)
+    fn isScalar(self: &Yaml, node: NodeId): bool {
+        return self.valid(node) && (self.nodes[node.idx].kind as i32) <= (YamlKind.Str as i32)
     }
 
     // Number of children: sequence entries, or map entries. 0 for scalars.
-    fn len(self: &Yaml, node: i64): i64 {
+    fn len(self: &Yaml, node: NodeId): i64 {
         if !self.valid(node) {
             return 0
         }
-        return self.nodes[node].childCount
+        return self.nodes[node.idx].childCount
     }
 
-    // i-th child of a sequence or map, or -1.
-    fn at(self: &Yaml, node: i64, i: i64): i64 {
-        if !self.valid(node) || i < 0 || i >= self.nodes[node].childCount {
-            return -1
+    // i-th child of a sequence or map, or nil.
+    fn at(self: &Yaml, node: NodeId, i: i64): NodeId {
+        if !self.valid(node) || i < 0 || i >= self.nodes[node.idx].childCount {
+            return nilNode()
         }
-        return self.childIdx[self.nodes[node].childStart + i]
+        return self.childIdx[self.nodes[node.idx].childStart + i]
     }
 
     // Key of the i-th map entry, or "".
-    fn keyAt(self: &Yaml, node: i64, i: i64): string {
+    fn keyAt(self: &Yaml, node: NodeId, i: i64): string {
         let child = self.at(node, i)
-        if child < 0 {
+        if isNilNode(child) {
             return ""
         }
-        let k = self.nodes[child].keyIdx
-        if k < 0 {
+        let k = self.nodes[child.idx].keyIdx
+        if isNilStr(k) {
             return ""
         }
-        return self.strs[k].clone()
+        return self.strs[k.idx].clone()
     }
 
-    // Value for `key`, or -1. First match wins, so an explicit key beats one
+    // Value for `key`, or nil. First match wins, so an explicit key beats one
     // spliced in by a `<<` merge.
-    fn get(self: &Yaml, node: i64, key: string): i64 {
+    fn get(self: &Yaml, node: NodeId, key: string): NodeId {
         if !self.isMap(node) {
-            return -1
+            return nilNode()
         }
-        for i in 0..self.nodes[node].childCount {
-            let child = self.childIdx[self.nodes[node].childStart + i]
-            let k = self.nodes[child].keyIdx
-            if k >= 0 && self.strs[k] == key {
+        for i in 0..self.nodes[node.idx].childCount {
+            let child = self.childIdx[self.nodes[node.idx].childStart + i]
+            let k = self.nodes[child.idx].keyIdx
+            if !isNilStr(k) && self.strs[k.idx] == key {
                 return child
             }
         }
-        return -1
+        return nilNode()
     }
 
-    fn has(self: &Yaml, node: i64, key: string): bool {
-        return self.get(node, key) >= 0
+    fn has(self: &Yaml, node: NodeId, key: string): bool {
+        return !isNilNode(self.get(node, key))
     }
 
     // Dotted lookup from the root: "server.hosts.0.name". A numeric segment
     // indexes a sequence.
-    fn path(self: &Yaml, p: string): i64 {
+    fn path(self: &Yaml, p: string): NodeId {
         var node = self.root
         var seg = ""
         var i: i64 = 0
@@ -1245,8 +1269,8 @@ impl Yaml {
             if i == p.len || p[i] == '.' {
                 if seg.len > 0 {
                     node = self.step(node, seg)
-                    if node < 0 {
-                        return -1
+                    if isNilNode(node) {
+                        return nilNode()
                     }
                     seg = ""
                 }
@@ -1258,74 +1282,74 @@ impl Yaml {
         return node
     }
 
-    fn step(self: &Yaml, node: i64, seg: &string): i64 {
+    fn step(self: &Yaml, node: NodeId, seg: &string): NodeId {
         if self.isSeq(node) {
             if let Option.Some(n) = parseInt(seg.clone()) {
                 return self.at(node, n)
             }
-            return -1
+            return nilNode()
         }
         return self.get(node, seg.clone())
     }
 
     // The scalar's source text, whatever its type — "" for containers.
-    fn text(self: &Yaml, node: i64): string {
+    fn text(self: &Yaml, node: NodeId): string {
         if !self.valid(node) {
             return ""
         }
-        let s = self.nodes[node].strIdx
-        if s < 0 {
+        let s = self.nodes[node.idx].strIdx
+        if isNilStr(s) {
             return ""
         }
-        return self.strs[s].clone()
+        return self.strs[s.idx].clone()
     }
 
-    fn asStr(self: &Yaml, node: i64): Option<string> {
-        if !self.valid(node) || self.nodes[node].kind != YamlKind.Str {
+    fn asStr(self: &Yaml, node: NodeId): Option<string> {
+        if !self.valid(node) || self.nodes[node.idx].kind != YamlKind.Str {
             return Option.None
         }
         return Option.Some(self.text(node))
     }
 
-    fn asInt(self: &Yaml, node: i64): Option<i64> {
-        if !self.valid(node) || self.nodes[node].kind != YamlKind.Int {
+    fn asInt(self: &Yaml, node: NodeId): Option<i64> {
+        if !self.valid(node) || self.nodes[node.idx].kind != YamlKind.Int {
             return Option.None
         }
-        return Option.Some(self.nodes[node].intVal)
+        return Option.Some(self.nodes[node.idx].intVal)
     }
 
     // Ints answer here too — a YAML `1` is a perfectly good float.
-    fn asFloat(self: &Yaml, node: i64): Option<f64> {
+    fn asFloat(self: &Yaml, node: NodeId): Option<f64> {
         if !self.valid(node) {
             return Option.None
         }
-        let k = self.nodes[node].kind
+        let k = self.nodes[node.idx].kind
         if k != YamlKind.Float && k != YamlKind.Int {
             return Option.None
         }
-        return Option.Some(self.nodes[node].floatVal)
+        return Option.Some(self.nodes[node.idx].floatVal)
     }
 
-    fn asBool(self: &Yaml, node: i64): Option<bool> {
-        if !self.valid(node) || self.nodes[node].kind != YamlKind.Bool {
+    fn asBool(self: &Yaml, node: NodeId): Option<bool> {
+        if !self.valid(node) || self.nodes[node.idx].kind != YamlKind.Bool {
             return Option.None
         }
-        return Option.Some(self.nodes[node].boolVal)
+        return Option.Some(self.nodes[node.idx].boolVal)
     }
 
-    fn getStr(self: &Yaml, node: i64, key: string): Option<string> {
+    fn getStr(self: &Yaml, node: NodeId, key: string): Option<string> {
         return self.asStr(self.get(node, key))
     }
 
-    fn getInt(self: &Yaml, node: i64, key: string): Option<i64> {
+    fn getInt(self: &Yaml, node: NodeId, key: string): Option<i64> {
         return self.asInt(self.get(node, key))
     }
 
-    fn getFloat(self: &Yaml, node: i64, key: string): Option<f64> {
+    fn getFloat(self: &Yaml, node: NodeId, key: string): Option<f64> {
         return self.asFloat(self.get(node, key))
     }
 
-    fn getBool(self: &Yaml, node: i64, key: string): Option<bool> {
+    fn getBool(self: &Yaml, node: NodeId, key: string): Option<bool> {
         return self.asBool(self.get(node, key))
     }
 }
@@ -1388,7 +1412,7 @@ fn jsonNumber(text: &string): string {
     return s
 }
 
-fn emitJson(y: &Yaml, node: i64, out: &mut string) {
+fn emitJson(y: &Yaml, node: NodeId, out: &mut string) {
     let k = y.kind(node)
     match k {
         YamlKind.Missing => { out.pushStr("null") }

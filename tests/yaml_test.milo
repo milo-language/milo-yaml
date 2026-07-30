@@ -100,7 +100,8 @@ fn testAccessors() {
     assertMsg((doc.asFloat(doc.path("server.ratio")) ?? 0.0) == 0.25, "ratio should be 0.25")
     assertStrEqual(doc.asStr(doc.path("hosts.1.name")) ?? "", "b")
     assertEqual64(doc.len(doc.path("hosts")), 2)
-    assertEqual64(doc.path("nope.deeper"), -1)
+    // A missing path yields a nil handle (no longer a bare -1 i64).
+    assertMsg(!doc.exists(doc.path("nope.deeper")), "missing path is nil")
     // A missing handle reads as absent rather than trapping.
     assertEqual64(doc.asInt(doc.path("nope")) ?? -5, -5)
     assertMsg(doc.isMap(doc.root()), "root is a map")
