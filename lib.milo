@@ -769,8 +769,8 @@ impl YamlParser {
             var started = false
             var blanks: i64 = 0
             var prevLiteral = false
-            for i in 0..raw.len {
-                let line = raw[i]
+            for ln in 0..raw.len {
+                let line = raw[ln]
                 if line.len == 0 {
                     if started {
                         blanks = blanks + 1
@@ -797,11 +797,11 @@ impl YamlParser {
                 prevLiteral = literal
             }
         } else {
-            for i in 0..raw.len {
-                if i > 0 {
+            for ln in 0..raw.len {
+                if ln > 0 {
                     body.push('\n')
                 }
-                body.pushStr(raw[i])
+                body.pushStr(raw[ln])
             }
         }
         if chomp == 0 {
