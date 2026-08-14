@@ -4,8 +4,8 @@ A YAML 1.2 subset parser for [Milo](https://github.com/milo-language/milo). No
 dependencies beyond the standard library.
 
 ```bash
-milo add github.com/milo-language/yaml            # latest release
-milo add github.com/milo-language/yaml@v0.1.1     # or pin a specific tag
+milo add github.com/milo-language/milo-yaml            # latest release
+milo add github.com/milo-language/milo-yaml@v0.2.1     # or pin a specific tag
 ```
 
 The ref-less form resolves to the highest tag and writes it into `milo.json`;
