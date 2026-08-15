@@ -3,7 +3,7 @@
   "version": "0.2.1",
   "description": "YAML 1.2 subset parser",
   "license": "MIT",
-  "repository": "github.com/milo-language/yaml",
+  "repository": "github.com/milo-language/milo-yaml",
   "lib": "lib.milo",
   "targets": ["darwin", "linux", "windows"],
   "exclude": ["tests/**", "examples/**"]
