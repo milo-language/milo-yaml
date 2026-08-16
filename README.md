@@ -1,58 +1,53 @@
 # yaml
 
-A YAML 1.2 subset parser for [Milo](https://github.com/milo-language/milo). No
-dependencies beyond the standard library.
+This is a package for the [Milo language](https://milo-language.github.io/milo/).
 
-## Install
+## Overview
+
+A YAML 1.2 subset parser, with no dependencies beyond the standard library.
+
+Parsing hands back a `Yaml` document, and every lookup returns a *handle* rather
+than an `Option`. A path into something that does not exist comes back absent
+instead of forcing a branch at every hop, so `??` supplies the default once, at
+the end.
+
+Supported: block and flow collections, block scalars, anchors, aliases and merge
+keys, and YAML 1.2 core scalar typing. `scripts/oracle.py` checks the results
+against `ruamel.yaml` over a corpus of real Kubernetes, GitHub Actions and
+OpenAPI documents.
+
+Not supported, each a real part of YAML that config files rarely reach for:
+multi-line plain scalars, flow collections spanning lines, explicit keys
+(`? key`), tags (parsed but not applied), directives (`%YAML`), complex keys,
+and tabs as indentation.
+
+Every function and method: [docs/api.md](docs/api.md).
+
+## Installation
 
 ```bash
 milo add github.com/milo-language/milo-yaml            # latest release
 milo add github.com/milo-language/milo-yaml@v0.2.1     # or pin a tag
 ```
 
-No tag means the newest release, which `milo add` writes into `milo.json`.
-Either way, `milo.lock` pins the exact commit.
-
-Then import it:
-
 ```milo
 from "yaml" import { yamlParse }
 ```
 
-## Quick start
+## Examples
 
-Copy this into `main.milo` and run `milo run main.milo`:
+### Reading a config file
 
-```milo
-from "yaml" import { yamlParse, yamlToJson }
+Given `app.yaml`:
 
-fn main(): i32 {
-    let doc = yamlParse("
+```yaml
 server:
   host: 0.0.0.0
   port: 8080
   tls: true
-")!
-
-    let host = doc.asStr(doc.path("server.host")) ?? "127.0.0.1"
-    let port = doc.asInt(doc.path("server.port")) ?? 80
-    let tls = doc.asBool(doc.path("server.tls")) ?? false
-
-    print($"{host}:{port} tls={tls}")
-    print(yamlToJson(doc))
-    return 0
-}
+features:
+  debug: false
 ```
-
-```
-0.0.0.0:8080 tls=true
-{"server":{"host":"0.0.0.0","port":8080,"tls":true}}
-```
-
-## Reading a config file
-
-`path` takes a dotted lookup and hands back a handle. A miss is not an error —
-it is a handle that reads as absent, so `??` supplies the default:
 
 ```milo
 from "yaml" import { yamlParse }
@@ -62,7 +57,7 @@ fn main(): i32 {
     let doc = yamlParse(readFile("app.yaml")!)!
 
     let host = doc.asStr(doc.path("server.host")) ?? "127.0.0.1"
-    let port = doc.asInt(doc.path("server.port")) ?? 8080
+    let port = doc.asInt(doc.path("server.port")) ?? 80
     let timeout = doc.asFloat(doc.path("server.timeout")) ?? 1.0
     let debug = doc.asBool(doc.path("features.debug")) ?? false
 
@@ -71,57 +66,47 @@ fn main(): i32 {
 }
 ```
 
-Because handles chain without an `Option` at every hop, a path into something
-that does not exist just comes back absent instead of forcing a branch per step.
+```
+0.0.0.0:8080 timeout=1s debug=false
+```
 
-## Sequences
+Nothing in the file set `server.timeout`; the `?? 1.0` answered for it.
 
-Index a sequence inside a path, or walk it with `len` and `at`:
+### Sequences
 
-```yaml
+`len` and `at` walk a sequence, and a path can index one directly
+(`services.0.name`):
+
+```milo
+let doc = yamlParse("
 services:
   - name: web
     ports: [80, 443]
   - name: db
     ports: [5432]
-```
-
-```milo
-print(doc.asStr(doc.path("services.0.name")) ?? "?")   // web
+")!
 
 let services = doc.path("services")
 for i in 0..doc.len(services) {
     let svc = doc.at(services, i)
     let name = doc.getStr(svc, "name") ?? "?"
-
     let ports = doc.get(svc, "ports")
-    var list = ""
-    for p in 0..doc.len(ports) {
-        if p > 0 {
-            list.pushStr(", ")
-        }
-        list.pushStr(doc.text(doc.at(ports, p)))
-    }
-    print($"{name}: [{list}]")
+    print($"{name}: {doc.len(ports)} port(s), first {doc.text(doc.at(ports, 0))}")
 }
 ```
 
-## Walking unknown keys
+```
+web: 2 port(s), first 80
+db: 1 port(s), first 5432
+```
+
+### Anchors and merge keys
+
+`&name` / `*name` and `<<:` work, and a key written out always beats a merged
+one:
 
 ```milo
-let features = doc.path("features")
-for i in 0..doc.len(features) {
-    let key = doc.keyAt(features, i)
-    print($"{key} = {doc.text(doc.at(features, i))}")
-}
-```
-
-## Anchors and merge keys
-
-`&name` / `*name` and `<<:` work, and an explicitly written key always beats a
-merged one:
-
-```yaml
+let doc = yamlParse("
 defaults: &defaults
   restart: always
 
@@ -130,129 +115,17 @@ services:
     <<: *defaults
   - name: db
     <<: *defaults
-    restart: on-failure   # wins over the merged value
+    restart: on-failure
+")!
+
+print(doc.getStr(doc.path("services.0"), "restart") ?? "?")
+print(doc.getStr(doc.path("services.1"), "restart") ?? "?")
 ```
 
-```milo
-print(doc.getStr(doc.path("services.0"), "restart") ?? "no")   // always
-print(doc.getStr(doc.path("services.1"), "restart") ?? "no")   // on-failure
+```
+always
+on-failure
 ```
 
-## Handling parse errors
-
-`yamlParse` returns a `Result`. `!` unwraps it (panicking on a bad document),
-`?` propagates it, and `match` lets you handle it. Errors carry the line:
-
-```milo
-match yamlParse(text) {
-    Result.Ok(doc) => {
-        print(doc.asStr(doc.path("name")) ?? "unnamed")
-    }
-    Result.Err(msg) => {
-        print($"bad config: {msg}")   // line 4: unknown alias '*base'
-        return 1
-    }
-}
-```
-
-## Multiple documents
-
-```milo
-from "yaml" import { yamlParseAll }
-
-let docs = yamlParseAll("a: 1\n---\na: 2\n")!
-for i in 0..docs.len {
-    print((docs[i].asInt(docs[i].path("a")) ?? 0).toString())
-}
-```
-
-## Runnable examples
-
-`examples/` holds a complete program you can run against a real config:
-
-```bash
-milo run examples/config.milo examples/app.yaml
-```
-
-- `examples/config.milo` — typed lookups with defaults, a sequence of maps,
-  merge keys, and a block scalar
-- `examples/app.yaml` — the docker-compose-shaped config it reads
-
-`tests/conformance/` has the corpus: a Kubernetes deployment, a GitHub Actions
-workflow, an OpenAPI document, and targeted feature files.
-
-## API
-
-```milo
-yamlParse(src)            // Result<Yaml>       — the first document
-yamlParseAll(src)         // Result<Vec<Yaml>>  — every `---`-separated document
-yamlToJson(doc)           // string             — compact JSON for the whole document
-```
-
-Everything else is a method on `Yaml`, taking and returning node handles:
-
-```milo
-// navigate
-doc.root()                       // handle of the top-level value
-doc.path("services.0.image")     // dotted lookup from the root
-doc.get(node, "key")             // map entry
-doc.at(node, i)                  // i-th sequence entry or map value
-doc.len(node)                    // child count (0 for scalars)
-doc.keyAt(node, i)               // key of the i-th map entry
-
-// read — all return Option
-doc.asStr(node)     doc.asInt(node)     doc.asFloat(node)     doc.asBool(node)
-doc.getStr(node, "k")   doc.getInt(node, "k")                 // get + as*, in one call
-doc.getFloat(node, "k") doc.getBool(node, "k")
-doc.text(node)                   // the scalar's source text, whatever its type
-
-// what is here
-doc.kind(node)                   // YamlKind.Null | Bool | Int | Float | Str | Seq | Map | Missing
-doc.isMap(node)     doc.isSeq(node)     doc.isScalar(node)    doc.isNull(node)
-doc.has(node, "k")  doc.exists(node)
-```
-
-`asFloat` answers for integers too, since a YAML `1` is a perfectly good float.
-`asInt` does not answer for floats.
-
-## What it parses
-
-- Block mappings and sequences, nested to any depth
-- Compact entries — `- name: x` and `- - nested`
-- Sequences at their key's own indentation
-- Flow collections — `[1, 2]`, `{a: 1}`, nested and mixed
-- Plain, single-quoted, and double-quoted scalars, with the full escape set
-  (`\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN`, …)
-- Block scalars — `|` and `>`, with `-`/`+` chomping and an explicit indent digit
-- Comments, blank lines, `---`/`...` document markers, multi-document streams
-- Anchors, aliases, and merge keys
-- YAML 1.2 core scalar typing: `null`/`~`, `true`/`false`, decimal, `0x`, `0o`,
-  `0b`, floats, `.inf`, `.nan` — plus `1_000` underscores, which are a 1.1
-  carry-over kept because real config files use them
-
-Checked against `ruamel.yaml` over the conformance corpus: `scripts/oracle.py`
-parses each file with both and compares the results as data.
-
-## What it does not parse
-
-Deliberate omissions, each a real part of YAML that config files rarely use:
-
-- Multi-line plain scalars — a plain scalar ends at its line
-- Flow collections spanning multiple lines
-- Explicit key syntax (`? key`)
-- Tags (`!!str`, `!Custom`) — parsed and ignored, not applied
-- Directives (`%YAML`, `%TAG`)
-- Complex keys — a key is always read as a string
-- Tabs as indentation (YAML forbids them too)
-
-## Tests
-
-```bash
-milo test tests                                   # unit tests
-python3 scripts/oracle.py --milo ./milo           # differential test (needs ruamel.yaml)
-milo run examples/config.milo examples/app.yaml   # worked example
-```
-
-## License
-
-MIT
+A complete program against a docker-compose-shaped config:
+`milo run examples/config.milo examples/app.yaml`.

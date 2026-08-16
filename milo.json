@@ -6,5 +6,5 @@
   "repository": "github.com/milo-language/milo-yaml",
   "lib": "lib.milo",
   "targets": ["darwin", "linux", "windows"],
-  "exclude": ["tests/**", "examples/**"]
+  "exclude": ["tests/**", "examples/**", "scripts/**", "docs/**"]
 }
