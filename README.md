@@ -4,24 +4,18 @@ This is a package for the [Milo language](https://milo-language.github.io/milo/)
 
 ## Overview
 
-A YAML 1.2 subset parser, with no dependencies beyond the standard library.
+Parse YAML and read values out of it.
 
-Parsing hands back a `Yaml` document, and every lookup returns a *handle* rather
-than an `Option`. A path into something that does not exist comes back absent
-instead of forcing a branch at every hop, so `??` supplies the default once, at
-the end.
+```milo
+let port = doc.asInt(doc.path("server.port")) ?? 8080
+```
 
-Supported: block and flow collections, block scalars, anchors, aliases and merge
-keys, and YAML 1.2 core scalar typing. `scripts/oracle.py` checks the results
-against `ruamel.yaml` over a corpus of real Kubernetes, GitHub Actions and
-OpenAPI documents.
+A lookup that misses comes back absent rather than erroring, so `??` supplies
+the default at the end of a chain and no step in the middle needs a branch.
 
-Not supported, each a real part of YAML that config files rarely reach for:
-multi-line plain scalars, flow collections spanning lines, explicit keys
-(`? key`), tags (parsed but not applied), directives (`%YAML`), complex keys,
-and tabs as indentation.
-
-Every function and method: [docs/api.md](docs/api.md).
+Covers the YAML config files are actually written in, including anchors and
+merge keys. Skips a few corners of the spec (multi-line plain scalars, tags,
+directives). Full list and API: [docs/api.md](docs/api.md).
 
 ## Installation
 

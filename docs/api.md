@@ -80,6 +80,11 @@ for i in 0..docs.len {
   `0b`, floats, `.inf`, `.nan` — plus `1_000` underscores, which are a 1.1
   carry-over kept because real config files use them
 
+Checked against `ruamel.yaml` over the conformance corpus: `scripts/oracle.py`
+parses each file with both and compares the results as data. The corpus in
+`tests/conformance/` is a Kubernetes deployment, a GitHub Actions workflow, an
+OpenAPI document, and targeted feature files.
+
 ## What it does not parse
 
 Deliberate omissions, each a real part of YAML that config files rarely use:
