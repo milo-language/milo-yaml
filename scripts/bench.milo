@@ -1,0 +1,56 @@
+// Parse a YAML file N times and report the median wall time.
+//
+//   milo run scripts/bench.milo <file> [iterations]
+//
+// The corpus this was written against is tests/conformance/*.yaml concatenated
+// under one key per file; any large real document works.
+from "../lib" import { yamlParse }
+from "std/fs" import { readFile }
+from "std/args" import { args }
+from "std/time" import { epochMillis }
+from "std/sort" import { sortI64 }
+from "std/strconv" import { parseInt }
+
+fn main(): i32 {
+    let argv = args()
+    if argv.len < 2 {
+        print("usage: milo run scripts/bench.milo <file> [iterations]")
+        return 1
+    }
+    let path = argv[1].clone()
+    var iters: i64 = 20
+    if argv.len > 2 {
+        iters = parseInt(argv[2].clone()) ?? 20
+    }
+
+    let source = match readFile(path) {
+        Result.Ok(text) => { text }
+        Result.Err(e) => {
+            print($"cannot read {path}: {e}")
+            return 1
+        }
+    }
+    print($"input {source.len} bytes, {iters} iterations")
+
+    var times: Vec<i64> = Vec.new()
+    var i: i64 = 0
+    while i < iters {
+        // yamlParse consumes its input, so the copy is made OUTSIDE the timed
+        // region; otherwise every measurement carries a 146KB memcpy.
+        let input = source.clone()
+        let t0 = epochMillis()
+        match yamlParse(input) {
+            Result.Ok(_doc) => {}
+            Result.Err(e) => {
+                print($"parse failed: {e}")
+                return 1
+            }
+        }
+        times.push(epochMillis() - t0)
+        i = i + 1
+    }
+    sortI64(times)
+    let median = times[times.len / 2]
+    print($"median {median} ms   min {times[0]} ms   max {times[times.len - 1]} ms")
+    return 0
+}

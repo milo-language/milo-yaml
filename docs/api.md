@@ -103,4 +103,12 @@ Deliberate omissions, each a real part of YAML that config files rarely use:
 milo test tests                                   # unit tests
 python3 scripts/oracle.py --milo ./milo           # differential test (needs ruamel.yaml)
 milo run examples/config.milo examples/app.yaml   # worked example
+milo run scripts/bench.milo <file.yaml> 25         # parse throughput, median of N
+```
+
+The differential test needs `ruamel.yaml`. To keep it out of your system python:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install ruamel.yaml
+.venv/bin/python scripts/oracle.py --milo /path/to/milo
 ```

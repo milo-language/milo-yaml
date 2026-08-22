@@ -22,7 +22,17 @@ CASES = sorted((ROOT / "tests" / "conformance").glob("*.yaml"))
 
 
 def reference(path):
-    from ruamel.yaml import YAML
+    try:
+        from ruamel.yaml import YAML
+    except ImportError:
+        # The docs name this script as the conformance gate, so a missing
+        # dependency should say what to install rather than dumping a traceback
+        # from inside the per-case loop.
+        sys.exit("oracle: ruamel.yaml is not installed.\n"
+                 "  pip install ruamel.yaml\n"
+                 "or, without touching your system python:\n"
+                 "  python3 -m venv .venv && .venv/bin/pip install ruamel.yaml\n"
+                 "  .venv/bin/python scripts/oracle.py --milo /path/to/milo")
 
     yaml = YAML(typ="safe", pure=True)
     return yaml.load(io.StringIO(path.read_text()))

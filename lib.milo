@@ -331,17 +331,46 @@ struct YamlParser {
 
 fn yamlSplitLines(src: &string): Vec<string> {
     var out: Vec<string> = Vec.new()
-    var cur = ""
-    for c in src {
-        if c == '\n' {
-            out.push(cur)
-            cur = ""
-        } else if c != '\r' {
-            cur.push(c)
+    var start: i64 = 0
+    var i: i64 = 0
+    while i < src.len {
+        if src[i] == '\n' {
+            out.push(yamlLineSlice(src, start, i))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    out.push(yamlLineSlice(src, start, src.len))
+    return out
+}
+
+// One substr per line instead of a byte-at-a-time push, which grew and
+// reallocated the accumulator as every line was built. \r is still stripped
+// from anywhere in the line, not just the end, but only a line that actually
+// contains one pays for the filtering pass.
+fn yamlLineSlice(src: &string, start: i64, end: i64): string {
+    var hasCr = false
+    var i = start
+    while i < end {
+        if src[i] == '\r' {
+            hasCr = true
+            i = end
+        } else {
+            i = i + 1
         }
     }
-    out.push(cur)
-    return out
+    if !hasCr {
+        return src.substr(start, end)
+    }
+    var cur = ""
+    var j = start
+    while j < end {
+        if src[j] != '\r' {
+            cur.push(src[j])
+        }
+        j = j + 1
+    }
+    return cur
 }
 
 fn newParser(src: &string): YamlParser {
@@ -396,9 +425,12 @@ impl YamlParser {
     }
 
     fn curText(self: &Self): string {
-        let line = self.lines[self.pos]
-        let ind = indentOf(line)
-        return line.substr(ind, line.len)
+        // Indexing to BIND deep-copies the whole line (the compiler's
+        // index-clone lint says so at this line); indexing to pass or to call
+        // borrows and copies nothing. This is the parser's hottest function, so
+        // the wasted copy was one malloc per call on top of the substr.
+        let ind = indentOf(self.lines[self.pos])
+        return self.lines[self.pos].substr(ind, self.lines[self.pos].len)
     }
 
     fn errAt(self: &Self, msg: &string): string {
