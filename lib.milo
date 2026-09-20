@@ -649,7 +649,7 @@ impl YamlParser {
             }
 
             if key == "<<" {
-                self.collectMerge(value, merged)
+                self.collectMerge(value, &mut merged)
                 continue
             }
             self.nodes[value.idx].keyIdx = self.addStr(key)
@@ -689,7 +689,7 @@ impl YamlParser {
             let count = self.nodes[value.idx].childCount
             for i in 0..count {
                 let child = self.childIdx[start + i]
-                self.collectMerge(child, out)
+                self.collectMerge(child, &mut out)
             }
         }
     }
@@ -1101,7 +1101,7 @@ pub fn unquote(text: &string): Result<string> {
                 cp = cp * 16 + h
             }
             i = i + width
-            encodeUtf8(out, cp)
+            encodeUtf8(&mut out, cp)
         } else {
             out.push(e)
         }
@@ -1446,14 +1446,14 @@ fn emitJson(y: &Yaml, node: NodeId, out: &mut string) {
         YamlKind.Bool => { out.pushStr(if y.asBool(node) ?? false { "true" } else { "false" }) }
         YamlKind.Int => { out.pushStr($"{y.asInt(node) ?? 0}") }
         YamlKind.Float => { out.pushStr(jsonNumber(y.text(node))) }
-        YamlKind.Str => { jsonEscape(out, y.text(node)) }
+        YamlKind.Str => { jsonEscape(&mut out, y.text(node)) }
         YamlKind.Seq => {
             out.push('[')
             for i in 0..y.len(node) {
                 if i > 0 {
                     out.push(',')
                 }
-                emitJson(y, y.at(node, i), out)
+                emitJson(y, y.at(node, i), &mut out)
             }
             out.push(']')
         }
@@ -1463,9 +1463,9 @@ fn emitJson(y: &Yaml, node: NodeId, out: &mut string) {
                 if i > 0 {
                     out.push(',')
                 }
-                jsonEscape(out, y.keyAt(node, i))
+                jsonEscape(&mut out, y.keyAt(node, i))
                 out.push(':')
-                emitJson(y, y.at(node, i), out)
+                emitJson(y, y.at(node, i), &mut out)
             }
             out.push('}')
         }
@@ -1476,6 +1476,6 @@ fn emitJson(y: &Yaml, node: NodeId, out: &mut string) {
 // parser, and for handing YAML config to anything that already speaks JSON.
 pub fn yamlToJson(y: &Yaml): string {
     var out = ""
-    emitJson(y, y.root(), out)
+    emitJson(y, y.root(), &mut out)
     return out
 }
