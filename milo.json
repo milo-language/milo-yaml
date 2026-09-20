@@ -1,6 +1,6 @@
 {
   "name": "yaml",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "YAML 1.2 subset parser",
   "license": "MIT",
   "repository": "github.com/milo-language/milo-yaml",
