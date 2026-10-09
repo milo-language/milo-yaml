@@ -20,8 +20,8 @@ directives). Full list and API: [docs/api.md](docs/api.md).
 ## Installation
 
 ```bash
-milo add github.com/milo-language/milo-yaml            # latest release
-milo add github.com/milo-language/milo-yaml@v0.2.1     # or pin a tag
+milo pkg add github.com/milo-language/milo-yaml            # latest release
+milo pkg add github.com/milo-language/milo-yaml@v0.2.1     # or pin a tag
 ```
 
 ```milo
